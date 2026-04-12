@@ -276,3 +276,22 @@ git push
   pipeline survives occasional malformed responses without crashing.
 - Runtime settings are loaded from `config.yaml` through `build_orchestrator_from_config()`,
   used by both `orchestrator.py` (CLI) and `gui.py` (web UI).
+
+---
+
+## Acknowledgements
+
+This project builds on the following open-source tools and libraries:
+
+- [Ollama](https://github.com/ollama/ollama) — local model runtime and model management.
+- [Gradio](https://github.com/gradio-app/gradio) — interactive web UI for council control and replay.
+- [Mem0](https://github.com/mem0ai/mem0) via `mem0ai` — persistent local long-term memory support.
+- [Playwright](https://github.com/microsoft/playwright) — optional browser-based page enrichment.
+- [SearXNG](https://github.com/searxng/searxng) — self-hosted metasearch provider option.
+- [Requests](https://github.com/psf/requests) — HTTP client for provider and service checks.
+- [PyYAML](https://github.com/yaml/pyyaml) — configuration parsing for runtime settings.
+
+And thanks to the maintainers and communities behind:
+
+- [DuckDuckGo](https://duckduckgo.com/) — no-key search provider option.
+- [Brave Search API](https://brave.com/search/api/) — optional API-based search provider.
