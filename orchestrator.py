@@ -1128,24 +1128,62 @@ def build_orchestrator_from_config(
     cfg = _load_yaml_config(Path(config_path))
     overrides = overrides or {}
 
-    council_cfg = cfg.get("council", [])
-    if council_cfg:
-        council = [
-            _build_model_config(item, ROLE_COUNCIL, DEFAULT_COUNCIL[idx % len(DEFAULT_COUNCIL)])
-            for idx, item in enumerate(council_cfg)
-        ]
+    # Check if tutor mode is enabled
+    tutor_mode_enabled = bool(overrides.get("tutor_mode_enabled", False))
+    
+    # Load tutor mode council if enabled, otherwise use regular council
+    if tutor_mode_enabled:
+        tutor_council_cfg = cfg.get("tutor_mode_council", [])
+        if tutor_council_cfg:
+            council = [
+                _build_model_config(item, ROLE_COUNCIL, DEFAULT_COUNCIL[idx % len(DEFAULT_COUNCIL)])
+                for idx, item in enumerate(tutor_council_cfg)
+            ]
+        else:
+            council = DEFAULT_COUNCIL
+            logger.warning("Tutor mode enabled but no tutor_mode_council config found; using default council")
     else:
-        council = DEFAULT_COUNCIL
+        council_cfg = cfg.get("council", [])
+        if council_cfg:
+            council = [
+                _build_model_config(item, ROLE_COUNCIL, DEFAULT_COUNCIL[idx % len(DEFAULT_COUNCIL)])
+                for idx, item in enumerate(council_cfg)
+            ]
+        else:
+            council = DEFAULT_COUNCIL
 
     ensure_future_you_seat = bool(cfg.get("council_features", {}).get("enable_future_you_seat", True))
-    if ensure_future_you_seat and not any(m.model_id == "future_you" for m in council):
+    # Only add Future You seat in regular mode, not tutor mode
+    if ensure_future_you_seat and not tutor_mode_enabled and not any(m.model_id == "future_you" for m in council):
         council = [*council, DEFAULT_COUNCIL[-1]]
 
-    synthesizer = _build_model_config(
-        cfg.get("synthesizer", {}),
-        ROLE_SYNTHESIZER,
-        DEFAULT_SYNTHESIZER,
-    )
+    # Use tutor-specific synthesizer if available in tutor mode
+    if tutor_mode_enabled:
+        tutor_synth_cfg = cfg.get("tutor_mode_synthesizer", {})
+        if tutor_synth_cfg:
+            synthesizer = _build_model_config(
+                tutor_synth_cfg,
+                ROLE_SYNTHESIZER,
+                DEFAULT_SYNTHESIZER,
+            )
+        else:
+            # Fallback to a lighter synthesizer for tutor mode
+            synthesizer = ModelConfig(
+                model_id="tutor_synthesizer",
+                ollama_name="gemma4-9b",
+                display_name="Gemma-4 9B (Tutor Synthesizer)",
+                role=ROLE_SYNTHESIZER,
+                context_size=8192,
+                temperature=0.65,
+                personality="",
+            )
+    else:
+        synthesizer = _build_model_config(
+            cfg.get("synthesizer", {}),
+            ROLE_SYNTHESIZER,
+            DEFAULT_SYNTHESIZER,
+        )
+    
     researcher = _build_model_config(
         cfg.get("researcher", {}),
         ROLE_RESEARCHER,

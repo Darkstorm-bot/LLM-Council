@@ -812,6 +812,7 @@ def run_council_stream(
             "scrape_top_n": preset_overrides.get("scrape_top_n", scrape_top_n),
             "research_depth": preset_overrides.get("research_depth", research_depth),
             "fact_check_threshold": preset_overrides.get("fact_check_threshold", fact_check_threshold),
+            "tutor_mode_enabled": tutor_mode,
         },
     )
     

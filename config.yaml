@@ -107,3 +107,10 @@ tutor_mode_council:
     ollama_name: phi4-mini
     display_name: Simple Explainer
     personality: "You explain complex concepts using everyday analogies. When possible, relate to Nepali contexts or universal experiences. Focus on intuition over formalism."
+
+tutor_mode_synthesizer:
+  model_id: tutor_synthesizer
+  ollama_name: gemma4-9b
+  display_name: Gemma-4 9B (Tutor Synthesizer)
+  context_size: 8192
+  temperature: 0.65
