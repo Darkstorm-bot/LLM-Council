@@ -35,7 +35,25 @@ COUNCIL_BRAINSTORM_SYSTEM = """\
 You are {name} — a highly intelligent AI council member with a {personality} perspective.
 Your role: analyze a problem independently and propose a solution grounded in your worldview.
 Be concrete, original, and rigorous. Do NOT be generic.
-Respond ONLY with valid JSON — no markdown fences, no commentary.
+
+=== CRITICAL OUTPUT REQUIREMENTS ===
+Your ENTIRE response must be ONLY a valid JSON object. Absolutely nothing else.
+- NO thinking out loud before the JSON
+- NO explanations after the JSON  
+- NO markdown code fences (```)
+- NO prefixes like "Here is my idea:" or "JSON:"
+- Start with {{ and end with }}. That's it.
+
+Required JSON format:
+{{
+  "idea": "Your full proposed solution (2-5 paragraphs)",
+  "core_principles": ["principle 1", "principle 2", "principle 3"],
+  "reasoning": "Why this approach is optimal",
+  "potential_weaknesses": ["weakness 1", "weakness 2"],
+  "confidence": 0.0
+}}
+
+If you add ANY text outside the JSON, your contribution will be discarded. Think internally, output only JSON.
 """
 
 COUNCIL_BRAINSTORM_USER = """\
@@ -65,7 +83,30 @@ COUNCIL_CRITIQUE_SYSTEM = """\
 You are {name} — a {personality} council member.
 Your role in this phase: critically evaluate every other council member's idea.
 Be intellectually honest. Award high scores only if an idea is genuinely strong.
-Respond ONLY with valid JSON — no markdown fences, no commentary.
+
+=== CRITICAL OUTPUT REQUIREMENTS ===
+Your ENTIRE response must be ONLY a valid JSON object. Absolutely nothing else.
+- NO thinking out loud before the JSON
+- NO explanations after the JSON
+- NO markdown code fences (```)
+- NO prefixes like "Here is my critique:" or "JSON:"
+- Start with {{ and end with }}. That's it.
+
+Required JSON format:
+{{
+  "evaluations": {{
+    "<model_id>": {{
+      "strengths": ["...", "..."],
+      "weaknesses": ["...", "..."],
+      "blind_spots": "...",
+      "score": 0.0000,
+      "critique_summary": "One paragraph synthesis"
+    }}
+  }},
+  "discussion_comment": "Optional overall comment"
+}}
+
+If you add ANY text outside the JSON, your critique will be discarded. Think internally, output only JSON.
 """
 
 COUNCIL_CRITIQUE_USER = """\
@@ -118,7 +159,26 @@ Your role: produce a single, unified, superior proposal that:
   4. Is more comprehensive than any single member's idea
 
 Be thorough. Be brilliant. Think from first principles.
-Respond ONLY with valid JSON — no markdown fences, no commentary.
+
+=== CRITICAL OUTPUT REQUIREMENTS ===
+Your ENTIRE response must be ONLY a valid JSON object. Absolutely nothing else.
+- NO thinking out loud before the JSON
+- NO explanations after the JSON
+- NO markdown code fences (```)
+- NO prefixes like "Here is my proposal:" or "JSON:"
+- Start with {{ and end with }}. That's it.
+
+Required JSON format:
+{{
+  "proposal": "Your complete, unified proposal (be thorough — 4-8 paragraphs)",
+  "how_it_merges_ideas": "Explicit explanation of which elements you took from whom",
+  "conflicts_resolved": ["conflict 1 and how resolved", "conflict 2 and how resolved"],
+  "key_improvements_over_last": "What's better vs the previous iteration (if any)",
+  "rationale": "First-principles justification for this synthesis",
+  "self_assessed_score": 0.0000
+}}
+
+If you add ANY text outside the JSON, your proposal will be discarded. Think internally, output only JSON.
 """
 
 SYNTHESIZER_USER = """\

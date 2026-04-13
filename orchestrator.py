@@ -388,6 +388,182 @@ class CouncilOrchestrator:
         
         return score, critique
 
+    def _recover_synthesizer_proposal(self, raw: str) -> tuple[str, str]:
+        """
+        Ultra-robust extraction for synthesizer responses when JSON parsing fails.
+        Returns (proposal, rationale) tuple.
+        """
+        if not raw or not isinstance(raw, str):
+            return "", "Fallback: Empty or invalid response"
+        
+        text = raw.strip()
+        proposal = ""
+        rationale = ""
+        
+        # Strategy 1: Look for "proposal" field value in broken JSON
+        # Handle both escaped and unescaped quotes
+        proposal_patterns = [
+            r'"proposal"\s*[:=]\s*"((?:[^"\\]|\\.)*)"',  # Normal escaped quotes
+            r'"proposal"\s*[:=]\s*"([^"]*)"',             # Simple case
+            r'"proposal"\s*[:=]\s*([^{][^\n]*)',          # Unquoted until newline
+        ]
+        
+        for pattern in proposal_patterns:
+            match = re.search(pattern, text, flags=re.IGNORECASE | re.DOTALL)
+            if match:
+                try:
+                    proposal = match.group(1).replace('\\"', '"').replace('\\n', '\n')
+                    if len(proposal) > 100:
+                        break
+                except Exception:
+                    pass
+        
+        # Strategy 2: If no proposal field, look for substantive text blocks
+        if not proposal or len(proposal) < 100:
+            # Remove JSON structure markers
+            cleaned = re.sub(r'\{[^{}]*\}', '', text)
+            cleaned = re.sub(r'\[[^\[\]]*\]', '', cleaned)
+            cleaned = re.sub(r'["{},:]', ' ', cleaned)
+            cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+            
+            # Find long paragraphs
+            paragraphs = [p.strip() for p in cleaned.split('\n\n') if len(p.strip()) > 200]
+            if paragraphs:
+                proposal = paragraphs[0]
+        
+        # Strategy 3: Extract rationale/justification
+        rationale_patterns = [
+            r'"rationale"\s*[:=]\s*"((?:[^"\\]|\\.)*)"',
+            r'"rationale"\s*[:=]\s*"([^"]*)"',
+            r'(?:justification|reasoning|why)[\s:]+([^\n]{50,})',
+        ]
+        
+        for pattern in rationale_patterns:
+            match = re.search(pattern, text, flags=re.IGNORECASE | re.DOTALL)
+            if match:
+                try:
+                    rationale = match.group(1).replace('\\"', '"').replace('\\n', '\n')
+                    if len(rationale) > 50:
+                        break
+                except Exception:
+                    pass
+        
+        # Fallbacks
+        if not proposal or len(proposal) < 50:
+            # Last resort: use entire text as proposal
+            proposal = text[:4000] if len(text) > 4000 else text
+        
+        if not rationale or len(rationale) < 20:
+            rationale = "Fallback: Could not extract structured rationale from malformed response."
+        
+        # Clean up
+        proposal = re.sub(r'\n{3,}', '\n\n', proposal).strip()
+        rationale = re.sub(r'\n{3,}', '\n\n', rationale).strip()
+        
+        return proposal, rationale
+
+    def _recover_brainstorm_from_text(self, raw: str) -> str:
+        """
+        Extract idea content from malformed brainstorm responses.
+        Uses multiple strategies to find the substantive proposal text.
+        """
+        if not raw or not isinstance(raw, str):
+            return ""
+        
+        text = raw.strip()
+        
+        # Strategy 1: Look for "idea" field value in broken JSON
+        idea_match = re.search(r'"idea"\s*[:=]\s*"((?:[^"\\]|\\.)*)"', text)
+        if idea_match:
+            try:
+                idea = idea_match.group(1).replace('\\"', '"').replace('\\n', '\n')
+                if len(idea) > 50:
+                    return idea
+            except Exception:
+                pass
+        
+        # Strategy 2: Extract text after common markers
+        markers = [
+            r"(?:###)?\s*IDEA\s*:?",
+            r"(?:###)?\s*PROPOSAL\s*:?",
+            r"(?:###)?\s*SOLUTION\s*:?",
+            r"(?:My |Our )?(?:best |proposed )?(?:solution|approach|idea)[\s:]+",
+        ]
+        
+        for marker_pattern in markers:
+            match = re.search(marker_pattern, text, flags=re.IGNORECASE)
+            if match:
+                start_pos = match.end()
+                # Find where JSON structure starts (if any)
+                next_json = text.find('{', start_pos)
+                if next_json > start_pos and next_json - start_pos < 50:
+                    candidate = text[start_pos:next_json].strip()
+                else:
+                    # Take everything after marker until end or next section
+                    candidate = text[start_pos:].split('\n##')[0].strip()
+                
+                if len(candidate) > 100:
+                    return candidate
+        
+        # Strategy 3: Extract longest substantive paragraph
+        paragraphs = [p.strip() for p in text.split('\n\n') if len(p.strip()) > 100]
+        if paragraphs:
+            # Return the longest paragraph that doesn't look like JSON
+            for para in sorted(paragraphs, key=len, reverse=True):
+                if not para.startswith('{') and '"' not in para[:50]:
+                    return para
+        
+        # Strategy 4: Remove JSON structure and keep meaningful text
+        cleaned = re.sub(r'\{[^{}]*\}', '', text)  # Remove simple JSON objects
+        cleaned = re.sub(r'\[[^\[\]]*\]', '', cleaned)  # Remove arrays
+        cleaned = re.sub(r'["{},:]', ' ', cleaned)  # Remove JSON punctuation
+        cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+        
+        # Keep substantial chunks
+        sentences = [s.strip() for s in re.split(r'[.!?]+', cleaned) if len(s.strip()) > 50]
+        if sentences:
+            return '. '.join(sentences[:3]) + '.'
+        
+        # Last resort: return cleaned text
+        if len(cleaned) > 100:
+            return cleaned[:1000] + ('...' if len(cleaned) > 1000 else '')
+        
+        return ""
+
+    def _extract_reasoning_from_text(self, raw: str) -> str:
+        """Extract reasoning/justification from malformed brainstorm responses."""
+        if not raw or not isinstance(raw, str):
+            return ""
+        
+        text = raw.strip()
+        
+        # Try to extract "reasoning" field
+        reason_match = re.search(r'"reasoning"\s*[:=]\s*"([^"]*(?:\\"[^"]*)*)"', text)
+        if reason_match:
+            try:
+                return reason_match.group(1).replace('\\"', '"')
+            except Exception:
+                pass
+        
+        # Look for reasoning sections
+        markers = [
+            r"(?:###)?\s*REASONING\s*:?",
+            r"(?:###)?\s*JUSTIFICATION\s*:?",
+            r"(?:###)?\s*RATIONAL(?:E)?\s*:?",
+            r"(?:Why |Because |This approach )",
+        ]
+        
+        for marker_pattern in markers:
+            match = re.search(marker_pattern, text, flags=re.IGNORECASE)
+            if match:
+                start_pos = match.end()
+                # Take next paragraph or until next section
+                candidate = text[start_pos:].split('\n\n')[0].strip()
+                if len(candidate) > 50 and len(candidate) < 500:
+                    return candidate
+        
+        return ""
+
     def _recover_critique_payload(self, raw: str, mp: MemoryPalace, model_id: str) -> tuple[dict[str, dict[str, Any]], str]:
         score = self._extract_score_from_text(raw, default=0.5)
         summary = self._clean_model_text(raw, max_len=360) or "Unstructured critique; fallback summary applied."
@@ -731,8 +907,12 @@ class CouncilOrchestrator:
                 idea      = data.get("idea", raw)
                 reasoning = data.get("reasoning", "")
             except ValueError:
-                logger.warning(f"   [{model.display_name}] JSON parse failed — using raw output")
-                idea, reasoning = raw, ""
+                logger.warning(f"   [{model.display_name}] JSON parse failed — applying robust extraction")
+                # Apply robust extraction for brainstorm responses
+                idea = self._recover_brainstorm_from_text(raw)
+                reasoning = self._extract_reasoning_from_text(raw)
+                if not idea or len(idea.strip()) < 50:
+                    idea = raw  # Last resort: use full raw text
 
             mp.add_idea(model.model_id, model.display_name, idea, reasoning)
             logger.info(f"   [{model.display_name}] idea captured ({len(idea)} chars)")
@@ -896,7 +1076,13 @@ class CouncilOrchestrator:
             data = self._extract_json_object(raw, "synthesizer")
             proposal, rationale = self._normalize_synthesizer_payload(data, raw)
         except ValueError:
-            proposal, rationale = raw, ""
+            logger.warning("   [Synthesizer] JSON parse failed — applying robust extraction")
+            # Apply dedicated synthesizer recovery method
+            proposal, rationale = self._recover_synthesizer_proposal(raw)
+            if not proposal or len(proposal.strip()) < 50:
+                proposal = raw  # Last resort: use full raw text
+            if not rationale or len(rationale.strip()) < 10:
+                rationale = "Fallback: Could not extract structured rationale from response."
 
         prop_idx = mp.add_synthesizer_proposal(proposal, rationale)
         logger.info(f"   [Synthesizer] proposal captured ({len(proposal)} chars)")
