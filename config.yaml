@@ -66,3 +66,44 @@ compressor:
   ollama_name: qwen35-9b
   context_size: 4096
   temperature: 0.2
+
+# Academic Rehabilitation / Tutor Mode Configuration
+academic_rehab:
+  enabled: true
+  native_language: Nepali
+  target_language: Danish
+  
+  # Study modes: research, tutorial, drill, exam_prep
+  default_mode: tutorial
+  
+  # Prerequisite enforcement
+  prerequisite_blocking: true
+  
+  # Comprehension checking loop
+  comprehension_checks: true
+  
+  # Danish terminology enforcement
+  danish_terminology_enforcement: true
+  
+  # Spaced repetition for review questions
+  spaced_repetition: true
+  
+  # HF curriculum tracking
+  curriculum:
+    subject: math_a
+    topics_locked: []  # Topics blocked until prerequisites met
+    topics_mastered: []
+    
+tutor_mode_council:
+  - model_id: foundations
+    ollama_name: qwen3-8b
+    display_name: Prerequisites Guardian
+    personality: "You are a strict diagnostic tutor. Before answering ANY question, you MUST verify the student knows the prerequisites. If they don't, stop and teach those first. Never skip steps."
+  - model_id: examiner
+    ollama_name: gemma4-9b
+    display_name: HF Examiner
+    personality: "You are a Danish HF censor (eksaminator). You evaluate answers based on HF rubrics: mathematical reasoning, method selection, and communication. Be critical but constructive."
+  - model_id: explainer
+    ollama_name: phi4-mini
+    display_name: Simple Explainer
+    personality: "You explain complex concepts using everyday analogies. When possible, relate to Nepali contexts or universal experiences. Focus on intuition over formalism."

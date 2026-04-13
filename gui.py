@@ -665,6 +665,10 @@ def run_council_stream(
     document_ingestion: bool = False,
     deep_dive: bool = False,
     fact_check: bool = False,
+    tutor_mode: bool = False,
+    study_mode: str = "Research",
+    subject_topic: str = "Math A - Functions",
+    danish_terminology: bool = True,
     document_files=None,
     document_urls: str = "",
 ):
@@ -735,6 +739,91 @@ def run_council_stream(
     worker.start()
 
     sessions_now = _list_session_files(target_state_dir)
+    
+    # Tutor mode initialization
+    tutor_dashboard_html = ""
+    prereq_status_md = "**Prerequisites:** Not checked yet"
+    comprehension_md = "**Comprehension:** No checks performed yet"
+    terminology_quiz_html = ""
+    next_topic_md = "_Suggested next topic will appear after enabling tutor mode._"
+    
+    if tutor_mode:
+        try:
+            from tools.academic_tools import (
+                PrerequisiteEngine, HFProgressTracker, 
+                HFTerminologyManager, ComprehensionChecker,
+                HF_MATH_A_CURRICULUM
+            )
+            
+            # Initialize tutor components
+            prereq_engine = PrerequisiteEngine()
+            progress_tracker = HFProgressTracker(user_id=memory_user_id)
+            term_manager = HFTerminologyManager(native_language="Nepali")
+            
+            # Map subject_topic to curriculum key
+            topic_key = subject_topic.lower().replace("math a - ", "").replace(" ", "_")
+            
+            # Diagnose prerequisites
+            diag = prereq_engine.diagnose_gaps(topic_key)
+            if "error" not in diag:
+                learning_path = diag.get("learning_path", [])
+                prereq_status_md = f"**Learning Path for {topic_key}:**\n\n"
+                for i, step in enumerate(learning_path):
+                    status = "✓" if step.get("mastery_required") else "○"
+                    prereq_status_md += f"{status} **{step['concept']}** ({step['level']})\n"
+                
+                # Generate terminology quiz
+                quiz = term_manager.generate_terminology_quiz(topic_key, num_questions=3)
+                terminology_quiz_html = "<h4>Danish Terminology Quiz</h4>"
+                for q in quiz:
+                    terminology_quiz_html += f"""
+                    <div style='padding:12px;margin:8px 0;background:#1b1d18;border:1px solid #2c2f28;'>
+                        <p style='color:#e0dbd0;font-family:"Martian Mono",monospace;font-size:12px;'>
+                            <strong>Q:</strong> {q['question']}
+                        </p>
+                        <p style='color:#5e6358;font-size:11px;margin-top:6px;'>
+                            <em>Hint: {q['hint']}</em>
+                        </p>
+                        <p style='color:#1a9e84;font-size:11px;margin-top:4px;'>
+                            <strong>A:</strong> {q['answer']} ({q['pronunciation']})
+                        </p>
+                    </div>
+                    """
+            
+            # Get next topic suggestion
+            suggestion = progress_tracker.suggest_next_topic()
+            if suggestion.get("suggested_topic"):
+                next_topic_md = f"""
+                **Suggested Next Topic:** {suggestion['suggested_topic']}
+                
+                **Reason:** {suggestion['reason']}
+                
+                **Prerequisites:** {suggestion['prerequisites_status']}
+                """
+            
+            # Build tutor dashboard HTML
+            tutor_dashboard_html = f"""
+            <div style='font-family:"Martian Mono",monospace;padding:16px;'>
+                <div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:20px;'>
+                    <div style='padding:16px;background:#1b1d18;border:1px solid #2c2f28;border-left:3px solid #1a9e84;'>
+                        <div style='font-size:10px;color:#5e6358;text-transform:uppercase;'>Study Mode</div>
+                        <div style='font-size:18px;color:#e0dbd0;margin-top:4px;'>{study_mode}</div>
+                    </div>
+                    <div style='padding:16px;background:#1b1d18;border:1px solid #2c2f28;border-left:3px solid #c49215;'>
+                        <div style='font-size:10px;color:#5e6358;text-transform:uppercase;'>Topic</div>
+                        <div style='font-size:18px;color:#e0dbd0;margin-top:4px;'>{topic_key}</div>
+                    </div>
+                    <div style='padding:16px;background:#1b1d18;border:1px solid #2c2f28;border-left:3px solid #3a78c4;'>
+                        <div style='font-size:10px;color:#5e6358;text-transform:uppercase;'>Danish Terms</div>
+                        <div style='font-size:18px;color:#e0dbd0;margin-top:4px;'>{"Enforced" if danish_terminology else "Disabled"}</div>
+                    </div>
+                </div>
+            </div>
+            """
+            
+        except Exception as e:
+            prereq_status_md = f"**Error initializing tutor mode:** {str(e)}"
+    
     yield (
         "Convening council session…",
         "### Session Snapshot\n- In progress",
@@ -745,6 +834,11 @@ def run_council_stream(
         _placeholder("Adversarial evidence split will appear after research completes."),
         "No minority report yet.",
         _placeholder("Decision signals will appear after voting completes."),
+        tutor_dashboard_html if tutor_mode else _placeholder("Enable Tutor Mode to see progress tracking."),
+        prereq_status_md,
+        comprehension_md,
+        terminology_quiz_html if tutor_mode else _placeholder("Danish terminology quiz appears here when enabled."),
+        next_topic_md,
     )
 
     while worker.is_alive() or not events.empty():
@@ -764,6 +858,11 @@ def run_council_stream(
                 _placeholder("Adversarial evidence split will appear after run completion."),
                 "No minority report yet.",
                 _placeholder("Decision signals will appear after voting completes."),
+                tutor_dashboard_html if tutor_mode else _placeholder("Enable Tutor Mode to see progress tracking."),
+                prereq_status_md,
+                comprehension_md,
+                terminology_quiz_html if tutor_mode else _placeholder("Danish terminology quiz appears here when enabled."),
+                next_topic_md,
             )
         except queue.Empty:
             continue
@@ -803,6 +902,11 @@ def run_council_stream(
         _build_adversarial_evidence_html(state_json),
         _build_minority_report_markdown(state_json),
         _build_decision_signals_html(state_json),
+        tutor_dashboard_html if tutor_mode else _placeholder("Enable Tutor Mode to see progress tracking."),
+        prereq_status_md,
+        comprehension_md,
+        terminology_quiz_html if tutor_mode else _placeholder("Danish terminology quiz appears here when enabled."),
+        next_topic_md,
     )
 
 
@@ -1559,6 +1663,40 @@ def build_app() -> gr.Blocks:
                             info="Detect contradictions & verify claims"
                         )
                     
+                    # Academic Rehabilitation / Tutor Mode Toggle
+                    with gr.Row():
+                        tutor_mode_enabled = gr.Checkbox(
+                            label="🎓 Tutor Mode",
+                            value=False,
+                            info="Enable teaching loop with comprehension checks"
+                        )
+                        study_mode = gr.Radio(
+                            choices=["Research", "Tutorial (Learn)", "Drill (Practice)", "Exam Prep (HF format)"],
+                            value="Research",
+                            label="Study Mode",
+                            interactive=True
+                        )
+                    
+                    with gr.Row():
+                        subject_selector = gr.Dropdown(
+                            choices=[
+                                "Math A - Functions",
+                                "Math A - Derivatives",
+                                "Math A - Integrals", 
+                                "Math A - Probability",
+                                "Math A - Statistics",
+                                "Physics B - Mechanics",
+                                "Physics B - Thermodynamics"
+                            ],
+                            label="HF Topic",
+                            value="Math A - Functions"
+                        )
+                        danish_terminology = gr.Checkbox(
+                            label="🇩🇰 Danish Terminology",
+                            value=True,
+                            info="Enforce Danish academic terms"
+                        )
+                    
                     with gr.Row():
                         threshold = gr.Slider(
                             label="Consensus Threshold",
@@ -1724,6 +1862,31 @@ def build_app() -> gr.Blocks:
                             elem_classes=["scroll-pane", "mono-pane"],
                         )
 
+                    # Tutor Mode Tab - Academic Rehabilitation
+                    with gr.Tab("🎓 Tutor Dashboard"):
+                        gr.Markdown("### HF Math A Progress Tracker")
+                        tutor_progress = gr.HTML(
+                            _placeholder("Tutor mode progress appears here. Enable Tutor Mode to start tracking."),
+                            elem_classes=["scroll-pane"],
+                        )
+                        with gr.Row():
+                            prerequisite_status = gr.Markdown(
+                                "**Prerequisites:** Not checked yet",
+                                elem_classes=["scroll-pane"],
+                            )
+                            comprehension_status = gr.Markdown(
+                                "**Comprehension:** No checks performed yet",
+                                elem_classes=["scroll-pane"],
+                            )
+                        terminology_quiz = gr.HTML(
+                            _placeholder("Danish terminology quiz appears here when enabled."),
+                            elem_classes=["scroll-pane"],
+                        )
+                        next_topic_suggestion = gr.Markdown(
+                            "_Suggested next topic will appear after enabling tutor mode._",
+                            elem_classes=["scroll-pane"],
+                        )
+
                 # Session loader row
                 with gr.Row(elem_classes=["session-row"]):
                     session_file = gr.Dropdown(
@@ -1757,6 +1920,10 @@ def build_app() -> gr.Blocks:
                 document_ingestion,
                 deep_dive,
                 fact_check,
+                tutor_mode_enabled,
+                study_mode,
+                subject_selector,
+                danish_terminology,
                 document_files,
                 document_urls,
             ],
@@ -1770,6 +1937,11 @@ def build_app() -> gr.Blocks:
                 adversarial_evidence,
                 minority_report,
                 decision_signals,
+                tutor_progress,
+                prerequisite_status,
+                comprehension_status,
+                terminology_quiz,
+                next_topic_suggestion,
             ],
         )
 
