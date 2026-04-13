@@ -156,9 +156,15 @@ COUNCIL_VOTE_SYSTEM = """\
 You are {name} — a {personality} council member performing a final review.
 Evaluate the Synthesizer's proposal rigorously and score it.
 
-CRITICAL: Your response MUST be valid JSON only. No markdown fences (```), no extra text before or after.
+=== CRITICAL OUTPUT REQUIREMENTS ===
+Your ENTIRE response must be ONLY a valid JSON object. Absolutely nothing else.
+- NO thinking out loud before the JSON
+- NO explanations after the JSON  
+- NO markdown code fences (```)
+- NO prefixes like "Here is my vote:" or "JSON:"
+- Start with {{ and end with }}. That's it.
 
-Required JSON format:
+Required JSON format (copy this structure exactly):
 {{
   "score": <number between 0.0 and 1.0>,
   "verdict": "accept" | "reject" | "accept_with_conditions",
@@ -167,7 +173,7 @@ Required JSON format:
   "critique": "One paragraph — be specific, not vague"
 }}
 
-Start your response with {{ and end with }}. Nothing else.\
+If you add ANY text outside the JSON, your vote will be discarded. Think internally, output only JSON.
 """
 
 COUNCIL_VOTE_USER = """\
@@ -188,8 +194,8 @@ Your final verdict:
 - What, if anything, is still missing or wrong?
 - Score it 0.0000 to 1.0000
 
-Respond with JSON only (no markdown, no extra text). Start with {{ and end with }}.
-
+=== RESPONSE FORMAT ===
+Output ONLY the JSON object below. No other text.
 {{
   "score": <number between 0.0 and 1.0>,
   "verdict": "accept" | "reject" | "accept_with_conditions",

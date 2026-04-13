@@ -111,60 +111,118 @@ def extract_json(text: str) -> dict | list:
     """
     Robustly extracts the first JSON object or array from model output.
     Handles markdown fences, stray text, and common formatting issues.
+    
+    Enhanced to handle:
+    - Thinking/reasoning text before JSON
+    - Explanatory text after JSON
+    - Multiple JSON blocks (takes the most complete one)
+    - Unquoted keys, trailing commas
+    - Markdown code fences with language hints
     """
     if not text or not isinstance(text, str):
         raise ValueError(f"Invalid input: expected non-empty string, got {type(text).__name__}")
     
-    # Try to strip markdown fences
-    cleaned = re.sub(r"```(?:json)?", "", text).strip()
+    original_text = text
     
-    # Remove any leading/trailing whitespace and common prefixes
-    cleaned = re.sub(r"^\s*(?:json\s*)?", "", cleaned, flags=re.IGNORECASE).strip()
+    # Try to strip markdown fences completely
+    cleaned = re.sub(r"```(?:json)?\s*", "", text).strip()
+    cleaned = re.sub(r"```\s*$", "", cleaned).strip()
     
-    # Remove any trailing explanatory text after the JSON block
-    # This handles cases where models add text after closing brace/bracket
-    json_end_match = re.search(r"(?:\}|\])\s*$", cleaned)
-    if json_end_match:
-        # Find the last } or ] and truncate there
-        last_brace = max(cleaned.rfind("}"), cleaned.rfind("]"))
-        if last_brace > 0:
-            cleaned = cleaned[:last_brace + 1]
-
-    # Try direct parse
+    # Remove common prefixes that models add
+    prefix_patterns = [
+        r"^here\s*(is|'s)?\s*(my)?\s*(json|response|answer|vote)[:\s]*",
+        r"^json\s*[:\s]*",
+        r"^response\s*[:\s]*",
+        r"^output\s*[:\s]*",
+        r"^thinking\s*[:\s]*",
+        r"^reasoning\s*[:\s]*",
+    ]
+    for pattern in prefix_patterns:
+        cleaned = re.sub(pattern, "", cleaned, flags=re.IGNORECASE).strip()
+    
+    # Strategy 1: Try parsing the entire cleaned text directly
     try:
         return json.loads(cleaned)
     except json.JSONDecodeError:
         pass
-
-    # Find the first { ... } or [ ... ] block with balanced braces/brackets
-    for start_char, end_char in [("{", "}"), ("[", "]")]:
-        start_idx = cleaned.find(start_char)
-        if start_idx == -1:
+    
+    # Strategy 2: Find ALL JSON-like blocks and try each one
+    # This handles cases where models output multiple attempts
+    json_blocks = []
+    
+    # Find all {...} blocks with balanced braces
+    depth = 0
+    start_idx = -1
+    for i, char in enumerate(cleaned):
+        if char == '{':
+            if depth == 0:
+                start_idx = i
+            depth += 1
+        elif char == '}':
+            depth -= 1
+            if depth == 0 and start_idx >= 0:
+                json_blocks.append(cleaned[start_idx:i+1])
+                start_idx = -1
+    
+    # Also find all [... ] blocks
+    depth = 0
+    start_idx = -1
+    for i, char in enumerate(cleaned):
+        if char == '[':
+            if depth == 0:
+                start_idx = i
+            depth += 1
+        elif char == ']':
+            depth -= 1
+            if depth == 0 and start_idx >= 0:
+                json_blocks.append(cleaned[start_idx:i+1])
+                start_idx = -1
+    
+    # Try each block, preferring longer/more complete ones
+    for block in sorted(json_blocks, key=len, reverse=True):
+        # Try direct parse
+        try:
+            return json.loads(block)
+        except json.JSONDecodeError:
+            pass
+        
+        # Fix unquoted keys
+        try:
+            fixed = re.sub(r'([{,]\s*)([a-zA-Z_][a-zA-Z0-9_]*)\s*:', r'\1"\2":', block)
+            return json.loads(fixed)
+        except json.JSONDecodeError:
+            pass
+        
+        # Fix trailing commas
+        try:
+            fixed = re.sub(r',(\s*[}\]])', r'\1', block)
+            return json.loads(fixed)
+        except json.JSONDecodeError:
+            pass
+        
+        # Fix both unquoted keys AND trailing commas
+        try:
+            fixed = re.sub(r'([{,]\s*)([a-zA-Z_][a-zA-Z0-9_]*)\s*:', r'\1"\2":', block)
+            fixed = re.sub(r',(\s*[}\]])', r'\1', fixed)
+            return json.loads(fixed)
+        except json.JSONDecodeError:
             continue
-        
-        # Count braces to find matching end
-        depth = 0
-        end_idx = -1
-        for i in range(start_idx, len(cleaned)):
-            if cleaned[i] == start_char:
-                depth += 1
-            elif cleaned[i] == end_char:
-                depth -= 1
-                if depth == 0:
-                    end_idx = i
-                    break
-        
-        if end_idx > start_idx:
-            candidate = cleaned[start_idx:end_idx + 1]
+    
+    # Strategy 3: Last resort - try to extract score-like values even from broken JSON
+    # This is specifically helpful for vote parsing
+    if '"score"' in cleaned.lower():
+        # Try to salvage by finding score value even in malformed JSON
+        score_match = re.search(r'"score"\s*[:=]\s*([0-9.]+)', cleaned)
+        if score_match:
             try:
-                return json.loads(candidate)
-            except json.JSONDecodeError:
-                # Try to fix common JSON issues
-                try:
-                    # Fix missing quotes around keys
-                    fixed = re.sub(r'([{,]\s*)([a-zA-Z_][a-zA-Z0-9_]*)\s*:', r'\1"\2":', candidate)
-                    return json.loads(fixed)
-                except json.JSONDecodeError:
-                    continue
-
-    raise ValueError(f"Could not extract JSON from model output:\n{text[:500]}")
+                score_val = float(score_match.group(1))
+                # Return a minimal valid structure
+                return {"score": min(1.0, max(0.0, score_val)), "partial": True}
+            except (ValueError, TypeError):
+                pass
+    
+    raise ValueError(
+        f"Could not extract valid JSON from model output.\n"
+        f"First 500 chars: {original_text[:500]}\n"
+        f"Found {len(json_blocks)} potential JSON blocks, all invalid"
+    )
