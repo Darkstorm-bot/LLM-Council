@@ -58,7 +58,7 @@ The default stack is:
 ## Setup
 
 ```bash
-git clone <repo>
+git clone https://github.com/geek-alt/LLM-Council.git
 cd llm_council
 pip install -r requirements.txt
 ```
