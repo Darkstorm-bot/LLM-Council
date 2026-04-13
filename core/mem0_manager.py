@@ -53,6 +53,7 @@ class Mem0MemoryManager:
                         "ollama_base_url": self.ollama_base_url,
                     },
                 },
+                "version": "v1.0",
             }
 
             return Memory.from_config(config)
