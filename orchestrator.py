@@ -286,10 +286,106 @@ class CouncilOrchestrator:
         return s
 
     def _recover_vote_from_text(self, raw: str) -> tuple[float, str]:
-        score = self._extract_score_from_text(raw, default=0.5)
-        critique = self._clean_model_text(raw, max_len=500)
-        if self._is_noisy_critique(critique):
-            critique = ""
+        """
+        Ultra-robust fallback for extracting score and critique from malformed vote responses.
+        Uses multiple strategies in sequence to maximize extraction success.
+        """
+        if not raw or not isinstance(raw, str):
+            return 0.5, "Empty or invalid response"
+        
+        text = raw.strip()
+        
+        # Strategy 1: Look for explicit score patterns with various formats
+        score_patterns = [
+            r'"score"\s*[:=]\s*(0(?:\.\d+)?|1(?:\.0+)?)',  # "score": 0.75
+            r'score\s*[:=]\s*(0(?:\.\d+)?|1(?:\.0+)?)',     # score: 0.75
+            r'\bscore\b\s*[:=]\s*(\d+(?:\.\d+)?)',          # score: 75 (will normalize)
+            r'(?:rating|evaluation)\s*[:=]\s*(0?\.\d+|1\.0+|\d+)',  # rating: 0.8
+        ]
+        
+        score = None
+        for pattern in score_patterns:
+            match = re.search(pattern, text, flags=re.IGNORECASE)
+            if match:
+                try:
+                    raw_score = float(match.group(1))
+                    # Normalize if model gave percentage (e.g., 75 instead of 0.75)
+                    if raw_score > 1.0:
+                        raw_score = raw_score / 100.0
+                    score = max(0.0, min(1.0, raw_score))
+                    break
+                except (ValueError, TypeError):
+                    continue
+        
+        # Strategy 2: If no explicit score, look for standalone decimal numbers
+        if score is None:
+            decimal_matches = re.findall(r'\b(0\.\d{1,4}|1\.0{0,4})\b', text)
+            if decimal_matches:
+                # Take the first reasonable score-like number
+                for match in decimal_matches:
+                    try:
+                        candidate = float(match)
+                        if 0.0 <= candidate <= 1.0:
+                            score = candidate
+                            break
+                    except ValueError:
+                        continue
+        
+        # Strategy 3: Last resort - check for common score words
+        if score is None:
+            if any(word in text.lower() for word in ['perfect', 'excellent', 'flawless']):
+                score = 1.0
+            elif any(word in text.lower() for word in ['good', 'solid', 'acceptable']):
+                score = 0.7
+            elif any(word in text.lower() for word in ['poor', 'weak', 'flawed']):
+                score = 0.3
+            elif any(word in text.lower() for word in ['reject', 'terrible', 'failed']):
+                score = 0.0
+            else:
+                score = 0.5  # Default neutral
+        
+        # Extract critique: find meaningful text that isn't JSON structure
+        critique_lines = []
+        in_json = False
+        json_depth = 0
+        
+        for line in text.split('\n'):
+            line_stripped = line.strip()
+            
+            # Track JSON boundaries
+            json_depth += line_stripped.count('{') - line_stripped.count('}')
+            json_depth += line_stripped.count('[') - line_stripped.count(']')
+            
+            # Skip pure JSON lines
+            if re.match(r'^[\s{},:\[\]"0-9.\-]+$', line_stripped):
+                continue
+            if re.match(r'^\s*"(score|verdict|remaining_issues|what_was_done_well|critique)"\s*:', line_stripped, flags=re.IGNORECASE):
+                continue
+            if line_stripped in ['{', '}', '[', ']', '']:
+                continue
+            
+            # Keep substantive lines outside JSON
+            if len(line_stripped) > 20 and not line_stripped.startswith('```'):
+                critique_lines.append(line_stripped)
+        
+        # Build critique from extracted lines
+        if critique_lines:
+            critique = ' '.join(critique_lines[:10])  # Limit to first 10 lines
+            if len(critique) > 500:
+                critique = critique[:500].rstrip() + "..."
+        else:
+            # Fallback: extract the "critique" field value if present
+            critique_match = re.search(r'"critique"\s*[:=]\s*"([^"]*(?:\\"[^"]*)*)"', text)
+            if critique_match:
+                critique = critique_match.group(1).replace('\\"', '"')
+            else:
+                critique = "Fallback: Could not extract structured critique from response."
+        
+        # Clean up critique
+        critique = re.sub(r'\n{3,}', '\n\n', critique).strip()
+        if not critique or len(critique) < 10:
+            critique = "Model provided minimal feedback in fallback mode."
+        
         return score, critique
 
     def _recover_critique_payload(self, raw: str, mp: MemoryPalace, model_id: str) -> tuple[dict[str, dict[str, Any]], str]:
