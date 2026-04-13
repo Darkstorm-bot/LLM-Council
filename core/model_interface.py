@@ -110,10 +110,25 @@ class OllamaClient:
 def extract_json(text: str) -> dict | list:
     """
     Robustly extracts the first JSON object or array from model output.
-    Handles markdown fences and stray text.
+    Handles markdown fences, stray text, and common formatting issues.
     """
+    if not text or not isinstance(text, str):
+        raise ValueError(f"Invalid input: expected non-empty string, got {type(text).__name__}")
+    
     # Try to strip markdown fences
     cleaned = re.sub(r"```(?:json)?", "", text).strip()
+    
+    # Remove any leading/trailing whitespace and common prefixes
+    cleaned = re.sub(r"^\s*(?:json\s*)?", "", cleaned, flags=re.IGNORECASE).strip()
+    
+    # Remove any trailing explanatory text after the JSON block
+    # This handles cases where models add text after closing brace/bracket
+    json_end_match = re.search(r"(?:\}|\])\s*$", cleaned)
+    if json_end_match:
+        # Find the last } or ] and truncate there
+        last_brace = max(cleaned.rfind("}"), cleaned.rfind("]"))
+        if last_brace > 0:
+            cleaned = cleaned[:last_brace + 1]
 
     # Try direct parse
     try:
@@ -121,13 +136,35 @@ def extract_json(text: str) -> dict | list:
     except json.JSONDecodeError:
         pass
 
-    # Find the first { ... } or [ ... ] block
-    for pattern in [r"\{[\s\S]*\}", r"\[[\s\S]*\]"]:
-        match = re.search(pattern, cleaned)
-        if match:
+    # Find the first { ... } or [ ... ] block with balanced braces/brackets
+    for start_char, end_char in [("{", "}"), ("[", "]")]:
+        start_idx = cleaned.find(start_char)
+        if start_idx == -1:
+            continue
+        
+        # Count braces to find matching end
+        depth = 0
+        end_idx = -1
+        for i in range(start_idx, len(cleaned)):
+            if cleaned[i] == start_char:
+                depth += 1
+            elif cleaned[i] == end_char:
+                depth -= 1
+                if depth == 0:
+                    end_idx = i
+                    break
+        
+        if end_idx > start_idx:
+            candidate = cleaned[start_idx:end_idx + 1]
             try:
-                return json.loads(match.group())
+                return json.loads(candidate)
             except json.JSONDecodeError:
-                continue
+                # Try to fix common JSON issues
+                try:
+                    # Fix missing quotes around keys
+                    fixed = re.sub(r'([{,]\s*)([a-zA-Z_][a-zA-Z0-9_]*)\s*:', r'\1"\2":', candidate)
+                    return json.loads(fixed)
+                except json.JSONDecodeError:
+                    continue
 
     raise ValueError(f"Could not extract JSON from model output:\n{text[:500]}")
