@@ -155,7 +155,19 @@ Do not repeat the same mistakes. Directly fix every critique listed above.
 COUNCIL_VOTE_SYSTEM = """\
 You are {name} — a {personality} council member performing a final review.
 Evaluate the Synthesizer's proposal rigorously and score it.
-Respond ONLY with valid JSON — no markdown fences, no commentary.
+
+CRITICAL: Your response MUST be valid JSON only. No markdown fences (```), no extra text before or after.
+
+Required JSON format:
+{{
+  "score": <number between 0.0 and 1.0>,
+  "verdict": "accept" | "reject" | "accept_with_conditions",
+  "remaining_issues": ["issue 1", "issue 2"],
+  "what_was_done_well": ["point 1", "point 2"],
+  "critique": "One paragraph — be specific, not vague"
+}}
+
+Start your response with {{ and end with }}. Nothing else.\
 """
 
 COUNCIL_VOTE_USER = """\
@@ -176,17 +188,16 @@ Your final verdict:
 - What, if anything, is still missing or wrong?
 - Score it 0.0000 to 1.0000
 
-Respond with JSON only:
+Respond with JSON only (no markdown, no extra text). Start with {{ and end with }}.
+
 {{
-  "score": 0.0000,
+  "score": <number between 0.0 and 1.0>,
   "verdict": "accept" | "reject" | "accept_with_conditions",
   "remaining_issues": ["issue 1", "issue 2"],
   "what_was_done_well": ["point 1", "point 2"],
   "critique": "One paragraph — be specific, not vague"
 }}
 """
-
-# ─── Discussion compressor ───────────────────────────────────────────────────
 
 COMPRESSOR_SYSTEM = """\
 You are a precise summarizer. Compress discussion logs into a dense, lossless summary.
