@@ -662,6 +662,11 @@ def run_council_stream(
     memory_ollama_url: str,
     memory_llm_model: str,
     memory_embedder_model: str,
+    document_ingestion: bool = False,
+    deep_dive: bool = False,
+    fact_check: bool = False,
+    document_files=None,
+    document_urls: str = "",
 ):
     if not prompt.strip():
         raise gr.Error("Please provide a prompt before convening the council.")
@@ -675,6 +680,18 @@ def run_council_stream(
 
     def on_progress(payload: dict) -> None:
         events.put(payload)
+
+    # Build document list from files and URLs
+    documents_to_process = []
+    if document_files:
+        if isinstance(document_files, list):
+            documents_to_process.extend([f.name for f in document_files])
+        else:
+            documents_to_process.append(document_files.name)
+    
+    if document_urls and document_urls.strip():
+        urls = [u.strip() for u in document_urls.split('\n') if u.strip()]
+        documents_to_process.extend(urls)
 
     orchestrator = build_orchestrator_from_config(
         config_path=CONFIG_PATH,
@@ -695,8 +712,18 @@ def run_council_stream(
             "memory_llm_model": memory_llm_model,
             "memory_embedder_model": memory_embedder_model,
             "progress_callback": on_progress,
+            "document_ingestion_enabled": document_ingestion,
+            "deep_dive_enabled": deep_dive,
+            "fact_check_enabled": fact_check,
         },
     )
+    
+    # Ingest documents if provided and enabled
+    if documents_to_process and document_ingestion:
+        try:
+            orchestrator.doc_engine.ingest_multiple(documents_to_process)
+        except Exception as e:
+            trace_lines.append(f"[WARNING] Document ingestion issue: {str(e)}")
 
     def _worker() -> None:
         try:
@@ -1513,6 +1540,25 @@ def build_app() -> gr.Blocks:
                         label="Enable Playwright enrichment",
                         value=False,
                     )
+                    
+                    # Phase 1-3 Feature Toggles
+                    with gr.Row():
+                        document_ingestion = gr.Checkbox(
+                            label="📄 Document Ingestion",
+                            value=False,
+                            info="Analyze PDFs, DOCX, GitHub repos"
+                        )
+                        deep_dive = gr.Checkbox(
+                            label="🔍 Deep-Dive Research",
+                            value=False,
+                            info="Iterative gap-filling searches"
+                        )
+                        fact_check = gr.Checkbox(
+                            label="✅ Fact Verification",
+                            value=False,
+                            info="Detect contradictions & verify claims"
+                        )
+                    
                     with gr.Row():
                         threshold = gr.Slider(
                             label="Consensus Threshold",
@@ -1576,6 +1622,20 @@ def build_app() -> gr.Blocks:
             # ── Right: outputs ─────────────────────────────────────────────
             with gr.Column(scale=7, elem_classes=["panel", "panel-right", "tight"]):
 
+                # Document upload section (Phase 1)
+                with gr.Accordion("📁 Document Upload (Optional)", open=False):
+                    gr.Markdown("Upload PDFs, DOCX, TXT files or paste GitHub repo URLs for analysis")
+                    document_files = gr.File(
+                        label="Upload Documents",
+                        file_types=[".pdf", ".docx", ".txt", ".md", ".rst", ".tex"],
+                        file_count="multiple"
+                    )
+                    document_urls = gr.Textbox(
+                        label="Or paste URLs (GitHub repos, web pages)",
+                        placeholder="https://github.com/user/repo\nhttps://example.com/article",
+                        lines=3
+                    )
+
                 with gr.Tabs():
 
                     with gr.Tab("Verdict"):
@@ -1597,6 +1657,24 @@ def build_app() -> gr.Blocks:
                     with gr.Tab("Evidence"):
                         adversarial_evidence = gr.HTML(
                             _placeholder("No adversarial evidence available yet."),
+                            elem_classes=["scroll-pane"],
+                        )
+
+                    with gr.Tab("📚 Citations & Sources"):
+                        citations_display = gr.HTML(
+                            _placeholder("Citations appear after document ingestion or research."),
+                            elem_classes=["scroll-pane"],
+                        )
+
+                    with gr.Tab("🔍 Research Trail"):
+                        research_trail = gr.HTML(
+                            _placeholder("Deep-dive research iterations appear here."),
+                            elem_classes=["scroll-pane"],
+                        )
+
+                    with gr.Tab("✅ Verification Report"):
+                        verification_report = gr.HTML(
+                            _placeholder("Fact verification results appear after analysis."),
                             elem_classes=["scroll-pane"],
                         )
 
@@ -1676,6 +1754,11 @@ def build_app() -> gr.Blocks:
                 memory_ollama_url,
                 memory_llm_model,
                 memory_embedder_model,
+                document_ingestion,
+                deep_dive,
+                fact_check,
+                document_files,
+                document_urls,
             ],
             outputs=[
                 final_answer,

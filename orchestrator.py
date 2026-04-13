@@ -28,7 +28,8 @@ from core.prompts import (
     COUNCIL_VOTE_SYSTEM, COUNCIL_VOTE_USER,
     COMPRESSOR_SYSTEM, COMPRESSOR_USER,
 )
-from tools.web_tools import ResearchAgent, SearXNG, BraveSearch, DuckDuckGoSearch, PlaywrightScraper, WebSearchProvider
+from tools.web_tools import ResearchAgent, SearXNG, BraveSearch, DuckDuckGoSearch, PlaywrightScraper, WebSearchProvider, IterativeResearchAgent
+from tools.document_tools import DocumentIngestionEngine, ParsedDocument
 
 logging.basicConfig(
     level=logging.INFO,
@@ -138,6 +139,7 @@ class CouncilOrchestrator:
         project_root: Optional[str]       = None,
         progress_callback: Optional[Callable[[dict[str, Any]], None]] = None,
         memory_manager: Optional[Mem0MemoryManager] = None,
+        document_ingestion_enabled: bool = False,
     ):
         self.council      = council      or DEFAULT_COUNCIL
         self.synthesizer  = synthesizer  or DEFAULT_SYNTHESIZER
@@ -161,6 +163,20 @@ class CouncilOrchestrator:
             playwright = PlaywrightScraper() if use_playwright else None,
             use_playwright_fallback = use_playwright,
         )
+        
+        # Iterative deep-dive research agent (Phase 2 feature)
+        self.iterative_research_agent = IterativeResearchAgent(
+            base_research_agent=self.research,
+            model_client=self.client,
+            researcher_model=self.researcher,
+            max_iterations=2,
+            gap_threshold=0.6,
+        )
+        
+        # Document ingestion engine (Phase 1 feature)
+        self.document_ingestion_enabled = document_ingestion_enabled
+        self.doc_engine = DocumentIngestionEngine() if document_ingestion_enabled else None
+        
         self.threshold     = consensus_threshold
         self.max_iterations = max_iterations
         self.results_per_query = results_per_query
@@ -376,6 +392,12 @@ class CouncilOrchestrator:
 
         # ── Phase 0: Research ─────────────────────────────────────────────────
         self._phase_research(mp)
+        
+        # ── Document Ingestion (Phase 1 Feature) ────────────────────────────────
+        if self.document_ingestion_enabled and self.doc_engine:
+            self._emit_progress("documents", "Processing ingested documents")
+            self._phase_document_ingestion(mp)
+        
         self._save(mp)
 
         # ── Phase 1: Independent brainstorm ───────────────────────────────────
@@ -446,33 +468,84 @@ class CouncilOrchestrator:
             counter_queries=counter_queries,
         )
 
-        support_results = self.research.research(
-            supporting_queries,
-            results_per_query=self.results_per_query,
-            scrape_top_n=self.scrape_top_n,
-        )
-        counter_results = self.research.research(
-            counter_queries,
-            results_per_query=self.results_per_query,
-            scrape_top_n=self.scrape_top_n,
-        )
-        mp.add_research(support_results, stance="support")
-        mp.add_research(counter_results, stance="counter")
-        quality_score, quality_note = self._compute_evidence_quality(support_results, counter_results)
+        # Use iterative research for deeper investigation
+        logger.info("   Starting iterative deep-dive research...")
+        self._emit_progress("research", "Iterative deep-dive research initiated")
+        
+        all_support_results = []
+        all_counter_results = []
+        support_metadata = {}
+        counter_metadata = {}
+        
+        # Iterative research for supporting queries
+        for idx, query in enumerate(supporting_queries):
+            results, metadata = self.iterative_research_agent.iterative_research(
+                initial_query=query,
+                mp=mp,
+                base_results_per_query=self.results_per_query,
+                followup_results_per_query=3,
+            )
+            all_support_results.extend(results)
+            if idx == 0:
+                support_metadata = metadata
+        
+        # Iterative research for counter queries  
+        for idx, query in enumerate(counter_queries):
+            results, metadata = self.iterative_research_agent.iterative_research(
+                initial_query=query,
+                mp=mp,
+                base_results_per_query=self.results_per_query,
+                followup_results_per_query=3,
+            )
+            all_counter_results.extend(results)
+            if idx == 0:
+                counter_metadata = metadata
+        
+        # Deduplicate results by URL
+        seen_urls = set()
+        deduped_support = []
+        for r in all_support_results:
+            url = r.get("url", "")
+            if url and url not in seen_urls:
+                seen_urls.add(url)
+                deduped_support.append(r)
+        
+        seen_urls = set()
+        deduped_counter = []
+        for r in all_counter_results:
+            url = r.get("url", "")
+            if url and url not in seen_urls:
+                seen_urls.add(url)
+                deduped_counter.append(r)
+        
+        mp.add_research(deduped_support, stance="support")
+        mp.add_research(deduped_counter, stance="counter")
+        quality_score, quality_note = self._compute_evidence_quality(deduped_support, deduped_counter)
         mp.evidence_quality_score = quality_score
         mp.evidence_quality_note = quality_note
+        
+        # Store iteration metadata
+        mp.research_metadata = {
+            "support": support_metadata,
+            "counter": counter_metadata,
+            "total_support_results": len(deduped_support),
+            "total_counter_results": len(deduped_counter),
+        }
+        
         self._emit_progress(
             "research",
-            f"Collected {len(support_results)} supporting and {len(counter_results)} counter sources",
+            f"Iterative research complete: {len(deduped_support)} supporting and {len(deduped_counter)} counter sources",
+            support_count=len(deduped_support),
+            counter_count=len(deduped_counter),
         )
 
         # Summarize supporting + counter evidence with researcher model
-        if support_results or counter_results:
+        if deduped_support or deduped_counter:
             support_snippets = "\n\n".join(
-                f"[{r['title']}]\n{r['snippet']}" for r in support_results[:4]
+                f"[{r['title']}]\n{r['snippet']}" for r in deduped_support[:4]
             )
             counter_snippets = "\n\n".join(
-                f"[{r['title']}]\n{r['snippet']}" for r in counter_results[:4]
+                f"[{r['title']}]\n{r['snippet']}" for r in deduped_counter[:4]
             )
             summary_raw = self.client.generate(
                 self.researcher,
@@ -494,6 +567,49 @@ class CouncilOrchestrator:
             mp.adversarial_summary = summary_raw.strip()
             logger.info(f"   Adversarial summary: {mp.adversarial_summary[:80]}...")
             self._emit_progress("research", "Adversarial evidence summary ready")
+    
+    # ── Document Ingestion Phase (Phase 1 Feature) ────────────────────────────
+    
+    def _phase_document_ingestion(self, mp: MemoryPalace) -> None:
+        """
+        Process pre-loaded documents from the document ingestion engine.
+        Documents should be loaded via orchestrator.doc_engine.ingest() before run().
+        """
+        logger.info("\n── Document Ingestion ──────────────────────────────────────")
+        self._emit_progress("documents", "Formatting ingested documents for context")
+        
+        if not self.doc_engine or not self.doc_engine.parsed_documents:
+            logger.info("   No documents ingested; skipping document phase")
+            return
+        
+        # Format all chunks for context injection
+        formatted_context = self.doc_engine.format_chunks_for_context(
+            max_chunks=15,  # Limit to avoid context explosion
+            max_total_chars=10000
+        )
+        
+        # Convert parsed documents to dict format for Memory Palace
+        doc_dicts = []
+        for doc in self.doc_engine.parsed_documents.values():
+            doc_dicts.append({
+                "doc_id": doc.doc_id,
+                "title": doc.title,
+                "source": doc.source,
+                "source_type": doc.source_type,
+                "chunks": doc.chunks,
+                "metadata": doc.metadata,
+            })
+        
+        # Add to Memory Palace
+        mp.add_ingested_documents(doc_dicts)
+        
+        logger.info(f"   Ingested {len(doc_dicts)} documents with {sum(len(d['chunks']) for d in doc_dicts)} total chunks")
+        self._emit_progress(
+            "documents",
+            f"Loaded {len(doc_dicts)} documents into context",
+            doc_count=len(doc_dicts),
+            total_chunks=sum(len(d['chunks']) for d in doc_dicts),
+        )
 
     # ── Phase 1: Brainstorm ───────────────────────────────────────────────────
 
@@ -983,6 +1099,13 @@ def build_orchestrator_from_config(
         llm_model=memory_llm_model,
         embedder_model=memory_embedder_model,
     )
+    
+    # Document ingestion config (Phase 1 feature)
+    doc_ingestion_enabled = bool(
+        overrides.get("document_ingestion_enabled")
+        if overrides.get("document_ingestion_enabled") is not None
+        else cfg.get("features", {}).get("document_ingestion_enabled", False)
+    )
 
     return CouncilOrchestrator(
         council=council,
@@ -1002,6 +1125,7 @@ def build_orchestrator_from_config(
         project_root=str(Path(config_path).resolve().parent),
         progress_callback=progress_callback,
         memory_manager=memory_manager,
+        document_ingestion_enabled=doc_ingestion_enabled,
     )
 
 
@@ -1030,6 +1154,8 @@ def main():
     parser.add_argument("--memory-top-k", type=int, default=None,           help="Mem0 retrieval depth")
     parser.add_argument("--memory-llm", default=None,                       help="Mem0 local LLM model (Ollama)")
     parser.add_argument("--memory-embedder", default=None,                  help="Mem0 local embedding model (Ollama)")
+    parser.add_argument("--documents", nargs="*", default=[],                help="Document paths/URLs to ingest (PDF, DOCX, TXT, MD, GitHub URLs)")
+    parser.add_argument("--document-ingestion", action="store_true",         help="Enable document ingestion feature")
     args = parser.parse_args()
 
     memory_enabled_override = None
@@ -1058,8 +1184,19 @@ def main():
             "memory_top_k": args.memory_top_k,
             "memory_llm_model": args.memory_llm,
             "memory_embedder_model": args.memory_embedder,
+            "document_ingestion_enabled": args.document_ingestion or bool(args.documents),
         },
     )
+    
+    # Pre-load documents if provided
+    if args.documents and orchestrator.doc_engine:
+        logger.info(f"Loading {len(args.documents)} documents...")
+        for doc_source in args.documents:
+            try:
+                orchestrator.doc_engine.ingest(doc_source)
+                logger.info(f"  ✓ Loaded: {doc_source}")
+            except Exception as e:
+                logger.error(f"  ✗ Failed to load {doc_source}: {e}")
 
     print("\n" + "═" * 70)
     print("  LLM COUNCIL — Starting session")

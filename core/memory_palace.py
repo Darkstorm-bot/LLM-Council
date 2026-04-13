@@ -56,6 +56,11 @@ class MemoryPalace:
     research_summary: str = ""
     adversarial_summary: str = ""
     stack_context: str = ""
+    research_metadata: dict = field(default_factory=dict)  # Phase 2: Iterative research metadata
+    
+    # ── Document Ingestion (Phase 1 Feature) ────────────────────────────────
+    ingested_documents: list = field(default_factory=list)  # [{doc_id, title, source, chunks, ...}]
+    document_context: str = ""
 
     # ── Council state ────────────────────────────────────────────────────────
     council_ideas: dict = field(default_factory=dict)       # {model_id: CouncilIdea}
@@ -113,8 +118,12 @@ class MemoryPalace:
         if self.long_term_memories:
             parts.append(self.build_long_term_memory_context())
 
-        if not self.web_research:
-            parts.append("No web research available.")
+        # Add ingested documents context (Phase 1 feature)
+        if self.document_context:
+            parts.append(self.document_context)
+
+        if not self.web_research and not self.ingested_documents:
+            parts.append("No web research or documents available.")
             return "\n\n".join(parts)
 
         if self.supporting_research:
@@ -127,7 +136,7 @@ class MemoryPalace:
             for r in self.counter_research[:6]:
                 parts.append(f"[{r.get('source', 'unknown')}] {r.get('title', '')}\n{r.get('snippet', '')}")
 
-        if not self.supporting_research and not self.counter_research:
+        if not self.supporting_research and not self.counter_research and not self.document_context:
             parts.append("=== WEB RESEARCH ===")
             for r in self.web_research[:6]:   # cap to avoid context blowout
                 parts.append(f"[{r.get('source', 'unknown')}] {r.get('title', '')}\n{r.get('snippet', '')}")
@@ -216,6 +225,44 @@ class MemoryPalace:
             self.supporting_research.extend(tagged)
         elif stance == "counter":
             self.counter_research.extend(tagged)
+        self._touch()
+    
+    def add_ingested_documents(self, documents: list[dict]) -> None:
+        """
+        Add ingested documents from DocumentIngestionEngine.
+        
+        Args:
+            documents: List of document dicts with keys: doc_id, title, source, chunks, metadata
+        """
+        for doc in documents:
+            self.ingested_documents.append({
+                "doc_id": doc.get("doc_id", ""),
+                "title": doc.get("title", ""),
+                "source": doc.get("source", ""),
+                "source_type": doc.get("source_type", ""),
+                "chunk_count": len(doc.get("chunks", [])),
+                "metadata": doc.get("metadata", {}),
+            })
+        
+        # Build formatted context string from all chunks
+        from tools.document_tools import DocumentIngestionEngine
+        engine = DocumentIngestionEngine()
+        # Note: In production, we'd pass actual parsed documents here
+        # For now, we'll build context from the stored document info
+        context_parts = [f"=== INGESTED DOCUMENTS ({len(documents)} docs) ===\n"]
+        
+        for doc in documents:
+            chunks = doc.get("chunks", [])
+            if chunks:
+                context_parts.append(f"\n--- {doc.get('title', 'Untitled')} [{doc.get('source_type', 'unknown')}] ---")
+                for chunk in chunks[:5]:  # Limit chunks per doc to avoid context explosion
+                    content = chunk.content if hasattr(chunk, 'content') else str(chunk)
+                    citation = f"[{doc.get('title', 'Unknown')}]"
+                    if hasattr(chunk, 'to_citation'):
+                        citation = chunk.to_citation()
+                    context_parts.append(f"{citation}\n{content[:1000]}...")
+        
+        self.document_context = "\n\n".join(context_parts)
         self._touch()
 
     def set_stack_context(self, context: str) -> None:

@@ -1,26 +1,36 @@
-# Python
+```gitignore
+# Dependencies
 __pycache__/
-*.py[cod]
+*.pyc
 *.pyo
 *.pyd
-*.so
-*.egg-info/
-.venv/
+*.pyc.*
+*.pyo.*
+.Python
 venv/
+.venv/
+.env
+.env.local
+.env.*
 
-# IDE / OS
-.vscode/
-.idea/
+# Test and coverage
+.pytest_cache/
+.coverage
+coverage/
+htmlcov/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+*.so
+*.dylib
+*.dll
+
+# Logs
+*.log
+
+# OS generated files
 .DS_Store
 Thumbs.db
-
-# Runtime logs and temp
-*.log
-*.tmp
-
-# Local state and personal saves
-council_states/*.json
-!council_states/.gitkeep
-
-# Local test/debug helpers
-test_run.py
+```

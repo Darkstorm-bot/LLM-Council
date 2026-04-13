@@ -6,7 +6,7 @@ Results are injected into the Memory Palace web_research field.
 import logging
 import re
 import html
-from typing import Optional
+from typing import Optional, Any
 from urllib.parse import urlparse, parse_qs, unquote
 
 import requests
@@ -265,6 +265,250 @@ class PlaywrightScraper:
         except Exception as e:
             logger.warning(f"Playwright failed for {url}: {e}")
             return {}
+
+
+# ════════════════════════════════════════════════════════════════════════════
+#  Iterative Deep-Dive Research — Phase 2 Feature
+# ════════════════════════════════════════════════════════════════════════════
+
+class IterativeResearchAgent:
+    """
+    Extends ResearchAgent with iterative deep-dive capabilities.
+    Identifies knowledge gaps after initial search and spawns targeted follow-up queries.
+    """
+    
+    def __init__(
+        self,
+        base_research_agent: Any = None,
+        model_client: Any = None,
+        researcher_model: Any = None,
+        max_iterations: int = 2,
+        gap_threshold: float = 0.6,
+    ):
+        self.base_agent = base_research_agent
+        self.client = model_client
+        self.researcher_model = researcher_model
+        self.max_iterations = max_iterations
+        self.gap_threshold = gap_threshold
+        self.logger = logging.getLogger("council.iterative_research")
+    
+    def _identify_knowledge_gaps(self, query: str, initial_results: list[dict]) -> list[str]:
+        """
+        Use LLM to analyze initial results and identify missing information.
+        Returns a list of follow-up search queries.
+        """
+        if not self.client or not self.researcher_model:
+            self.logger.warning("LLM client not configured, using fallback gap identification")
+            return self._fallback_gap_identification(query, initial_results)
+        
+        # Prepare context from initial results
+        result_summaries = []
+        for i, r in enumerate(initial_results[:6], 1):
+            summary = f"[{i}] {r.get('title', 'Untitled')}\n    URL: {r.get('url', '')}\n    Content: {r.get('snippet', '')[:400]}"
+            result_summaries.append(summary)
+        
+        context_text = "\n\n".join(result_summaries) if result_summaries else "No results found."
+        
+        system_prompt = """You are a research analyst identifying knowledge gaps.
+Given an original query and initial search results, identify 2-3 specific follow-up questions that would provide deeper, more comprehensive information.
+
+Focus on:
+- Missing technical details or specifications
+- Conflicting information that needs resolution  
+- Recent developments or updates not covered
+- Alternative perspectives or approaches
+- Implementation details, case studies, or real-world examples
+
+Respond with ONLY a JSON array of strings, each string being a focused search query.
+Example: ["query one", "query two", "query three"]"""
+
+        user_prompt = f"""Original Query: {query}
+
+Initial Search Results:
+{context_text}
+
+Task: Identify 2-3 specific follow-up search queries to fill knowledge gaps and provide deeper insights.
+Return ONLY a JSON array of strings."""
+
+        try:
+            response = self.client.generate(
+                self.researcher_model,
+                system_prompt,
+                user_prompt,
+                max_tokens=500,
+                temperature=0.3
+            )
+            
+            # Parse JSON array from response
+            import json
+            import re
+            
+            # Extract JSON array from response
+            json_match = re.search(r'\[[\s\S]*\]', response)
+            if json_match:
+                queries = json.loads(json_match.group(0))
+                if isinstance(queries, list) and all(isinstance(q, str) for q in queries):
+                    self.logger.info(f"Identified {len(queries)} knowledge gaps: {queries}")
+                    return queries[:3]  # Limit to 3 follow-up queries
+            
+            # Fallback: extract quoted strings
+            fallback_queries = re.findall(r'"([^"]+)"', response)
+            if fallback_queries:
+                self.logger.info(f"Fallback extracted {len(fallback_queries)} queries: {fallback_queries}")
+                return fallback_queries[:3]
+                
+        except Exception as e:
+            self.logger.warning(f"Failed to identify knowledge gaps: {e}")
+        
+        return self._fallback_gap_identification(query, initial_results)
+    
+    def _fallback_gap_identification(self, query: str, initial_results: list[dict]) -> list[str]:
+        """Fallback gap identification without LLM - uses heuristic query expansion."""
+        words = query.split()
+        expanded = []
+        
+        # Add technical depth query
+        expanded.append(f"{query} technical details implementation")
+        
+        # Add recent developments query
+        expanded.append(f"{query} 2024 2025 latest developments")
+        
+        # Add comparison/alternatives query
+        if len(words) > 3:
+            key_terms = " ".join([w for w in words if len(w) > 4][:3])
+            expanded.append(f"{key_terms} alternatives comparison pros cons")
+        
+        return expanded[:3]
+    
+    def _evaluate_coverage(self, query: str, all_results: list[dict]) -> tuple[float, str]:
+        """
+        Evaluate how well the collected results cover the query.
+        Returns a coverage score (0-1) and explanation.
+        """
+        if not all_results:
+            return 0.0, "No results collected"
+        
+        # Heuristic-based evaluation
+        total_snippet_length = sum(len(r.get('snippet', '')) for r in all_results)
+        unique_domains = len(set(r.get('url', '').split('/')[2] if '/' in r.get('url', '') else '' for r in all_results))
+        
+        # Scoring logic
+        score = 0.0
+        reasons = []
+        
+        if len(all_results) >= 8:
+            score += 0.3
+            reasons.append("high result count")
+        elif len(all_results) >= 4:
+            score += 0.2
+            reasons.append("moderate result count")
+        
+        if total_snippet_length >= 2000:
+            score += 0.3
+            reasons.append("detailed content")
+        elif total_snippet_length >= 1000:
+            score += 0.2
+            reasons.append("moderate content")
+        
+        if unique_domains >= 4:
+            score += 0.25
+            reasons.append("diverse sources")
+        elif unique_domains >= 2:
+            score += 0.15
+            reasons.append("some source diversity")
+        
+        # Check for authoritative domains
+        auth_count = sum(1 for r in all_results if any(t in r.get('url', '') for t in ['.edu', '.gov', 'arxiv.org', 'nature.com', 'science.org']))
+        if auth_count >= 2:
+            score += 0.15
+            reasons.append("authoritative sources")
+        
+        score = min(1.0, score)
+        explanation = f"Coverage: {', '.join(reasons)}" if reasons else "Limited coverage"
+        
+        self.logger.info(f"Coverage evaluation: {score:.2f} - {explanation}")
+        return score, explanation
+    
+    def iterative_research(
+        self,
+        initial_query: str,
+        mp: Any = None,
+        base_results_per_query: int = 4,
+        followup_results_per_query: int = 3,
+    ) -> tuple[list[dict], dict]:
+        """
+        Perform iterative research with knowledge gap identification.
+        
+        Returns:
+            - Combined list of all search results
+            - Metadata dict with iteration details
+        """
+        all_results = []
+        seen_urls: set[str] = set()
+        iteration_log = []
+        
+        self.logger.info(f"Starting iterative research for: {initial_query}")
+        current_queries = [initial_query]
+        
+        for iteration in range(self.max_iterations + 1):
+            iteration_data = {
+                "iteration": iteration,
+                "queries": [],
+                "new_results": 0,
+                "knowledge_gaps": [],
+            }
+            
+            # Search for current batch of queries
+            new_results_this_iteration = []
+            for query in current_queries:
+                results = self.base_agent.search_provider.search(
+                    query, 
+                    num_results=(base_results_per_query if iteration == 0 else followup_results_per_query)
+                )
+                
+                new_count = 0
+                for r in results:
+                    url = r.get("url", "")
+                    if url and url not in seen_urls:
+                        if self.base_agent._is_quality_result(r, self.base_agent._query_terms(query)):
+                            seen_urls.add(url)
+                            all_results.append(r)
+                            new_results_this_iteration.append(r)
+                            new_count += 1
+                
+                iteration_data["queries"].append(query)
+                iteration_data["new_results"] += new_count
+                self.logger.info(f"Iteration {iteration}: Query '{query}' → {new_count} new results")
+            
+            # After initial search (iteration 0), identify gaps and generate follow-ups
+            if iteration == 0:
+                coverage_score, coverage_explanation = self._evaluate_coverage(initial_query, all_results)
+                iteration_data["coverage_score"] = coverage_score
+                iteration_data["coverage_explanation"] = coverage_explanation
+                
+                if coverage_score < self.gap_threshold and iteration < self.max_iterations:
+                    knowledge_gaps = self._identify_knowledge_gaps(initial_query, new_results_this_iteration)
+                    iteration_data["knowledge_gaps"] = knowledge_gaps
+                    
+                    if knowledge_gaps:
+                        current_queries = knowledge_gaps
+                        self.logger.info(f"Launching follow-up searches for {len(knowledge_gaps)} knowledge gaps")
+                        continue
+                else:
+                    self.logger.info(f"Coverage adequate ({coverage_score:.2f}) or max iterations reached")
+            
+            iteration_log.append(iteration_data)
+            break  # Exit loop after one iteration cycle
+        
+        metadata = {
+            "total_results": len(all_results),
+            "iterations_completed": len(iteration_log),
+            "iteration_log": iteration_log,
+            "unique_urls": len(seen_urls),
+        }
+        
+        self.logger.info(f"Iterative research complete: {len(all_results)} total results from {len(seen_urls)} unique sources")
+        return all_results, metadata
 
 
 # ─── Research Agent ───────────────────────────────────────────────────────────
